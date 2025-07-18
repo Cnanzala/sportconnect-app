@@ -1,0 +1,174 @@
+name: Build Android AAB
+name: Build Android AAB
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+    
+    - name: Create minimal project structure
+      run: |
+        # Create basic package.json if missing
+        if [ ! -f package.json ]; then
+          cat > package.json << 'EOF'
+        {
+          "name": "sportconnect",
+          "version": "1.0.0",
+          "scripts": {
+            "build": "echo 'Build complete'"
+          },
+          "dependencies": {
+            "@capacitor/core": "^6.0.0",
+            "@capacitor/android": "^6.0.0",
+            "@capacitor/cli": "^6.0.0"
+          }
+        }
+        EOF
+        fi
+        
+        # Create dist directory with basic files
+        mkdir -p dist/public
+        cat > dist/public/index.html << 'EOF'
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>SportConnect</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body>
+            <div id="app">
+                <h1>SportConnect</h1>
+                <p>Sports Networking Platform</p>
+            </div>
+        </body>
+        </html>
+        EOF
+        
+        # Create basic capacitor config if missing
+        if [ ! -f capacitor.config.ts ]; then
+          cat > capacitor.config.ts << 'EOF'
+        import type { CapacitorConfig } from '@capacitor/cli';
+        
+        const config: CapacitorConfig = {
+          appId: 'com.sportconnect.network',
+          appName: 'SportConnect',
+          webDir: 'dist/public',
+          server: {
+            androidScheme: 'https'
+          }
+        };
+        
+        export default config;
+        EOF
+        fi
+    
+    - name: Install Capacitor CLI
+      run: npm install -g @capacitor/cli
+    
+    - name: Install dependencies
+      run: npm install
+    
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v2
+    
+    - name: Initialize Capacitor Android
+      run: |
+        cap add android || echo "Android already exists"
+        cap sync android
+    
+    - name: Create signing keystore
+      run: |
+        cd android
+        keytool -genkey -v -keystore sportconnect-release-key.keystore -alias sportconnect -keyalg RSA -keysize 2048 -validity 10000 -storepass sportconnect123 -keypass sportconnect123 -dname "CN=SportConnect, OU=Mobile, O=SportConnect, L=City, S=State, C=US"
+    
+    - name: Update Android build config
+      run: |
+        # Update build.gradle with signing config
+        cat > android/app/build.gradle << 'EOF'
+        apply plugin: 'com.android.application'
+        
+        android {
+            namespace "com.sportconnect.network"
+            compileSdk 34
+            defaultConfig {
+                applicationId "com.sportconnect.network"
+                minSdkVersion 22
+                targetSdkVersion 34
+                versionCode 2
+                versionName "1.1"
+                testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+            }
+            signingConfigs {
+                release {
+                    storeFile file('../sportconnect-release-key.keystore')
+                    storePassword 'sportconnect123'
+                    keyAlias 'sportconnect'
+                    keyPassword 'sportconnect123'
+                }
+            }
+            buildTypes {
+                release {
+                    signingConfig signingConfigs.release
+                    minifyEnabled false
+                    proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                }
+            }
+        }
+        
+        repositories {
+            google()
+            mavenCentral()
+            flatDir{
+                dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+            }
+        }
+        
+        dependencies {
+            implementation fileTree(include: ['*.jar'], dir: 'libs')
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+            implementation 'androidx.coordinatorlayout:coordinatorlayout:1.2.0'
+            implementation 'androidx.core:core-splashscreen:1.0.1'
+            implementation project(':capacitor-android')
+            testImplementation 'junit:junit:4.13.2'
+            androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+            androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+            implementation project(':capacitor-cordova-android-plugins')
+        }
+        
+        apply from: 'capacitor.build.gradle'
+        EOF
+    
+    - name: Build AAB
+      run: |
+        cd android
+        chmod +x gradlew
+        ./gradlew bundleRelease
+    
+    - name: Upload AAB
+      uses: actions/upload-artifact@v3
+      with:
+        name: sportconnect-release-bundle
+        path: android/app/build/outputs/bundle/release/app-release.aab
+    
+    - name: Upload APK (Debug)
+      uses: actions/upload-artifact@v3
+      with:
+        name: sportconnect-debug-apk
+        path: android/app/build/outputs/apk/debug/app-debug.apk
+      if: always()
